@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: barbearia-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: barbearia
+      POSTGRES_PASSWORD: barbearia
+      POSTGRES_DB: barbearia
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U barbearia -d barbearia']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: barbearia-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: barbearia-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://barbearia:barbearia@postgres:5432/barbearia?schema=public
+      JWT_SECRET: ${JWT_SECRET:-troque-esta-chave-em-producao-com-32-chars}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-troque-esta-outra-chave-em-producao-32}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:4000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}
+      MERCADOPAGO_ACCESS_TOKEN: ${MERCADOPAGO_ACCESS_TOKEN:-}
+      MERCADOPAGO_PUBLIC_KEY: ${MERCADOPAGO_PUBLIC_KEY:-}
+      MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:-}
+    ports:
+      - '4000:4000'
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:4000}
+    container_name: barbearia-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - '5173:80'
+
+volumes:
+  postgres_data:
+  redis_data:
