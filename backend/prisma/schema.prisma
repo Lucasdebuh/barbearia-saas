@@ -1,0 +1,572 @@
+// ---------------------------------------------------------------------------
+// Barbearia SaaS — Schema Prisma
+// Banco relacional: PostgreSQL
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------- ENUMS ---------------------------------------
+
+enum Role {
+  ADMIN
+  BARBER
+  CLIENT
+}
+
+enum UserStatus {
+  ATIVO
+  PENDENTE
+  SUSPENSO
+  BLOQUEADO
+}
+
+enum AppointmentStatus {
+  PENDENTE
+  CONFIRMADO
+  EM_ANDAMENTO
+  CONCLUIDO
+  CANCELADO
+  NAO_COMPARECEU
+}
+
+enum PaymentStatus {
+  PENDENTE
+  EM_PROCESSAMENTO
+  APROVADO
+  RECUSADO
+  CANCELADO
+  ESTORNADO
+  EXPIRADO
+}
+
+enum PaymentPurpose {
+  ASSINATURA // barbeiro paga a plataforma
+  AGENDAMENTO // cliente paga o barbeiro
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT_CARD
+  DEBIT_CARD
+  BOLETO
+  PRESENCIAL
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ATIVA
+  PENDENTE
+  EM_ATRASO
+  SUSPENSA
+  CANCELADA
+  EXPIRADA
+}
+
+enum BillingCycle {
+  MENSAL
+  ANUAL
+}
+
+enum NotificationType {
+  NOVO_AGENDAMENTO
+  AGENDAMENTO_CONFIRMADO
+  AGENDAMENTO_CANCELADO
+  LEMBRETE_AGENDAMENTO
+  PAGAMENTO_APROVADO
+  PAGAMENTO_RECUSADO
+  ASSINATURA_VENCENDO
+  ASSINATURA_VENCIDA
+  NOVA_MENSAGEM
+  AVALIACAO_RECEBIDA
+  SISTEMA
+}
+
+enum SupportStatus {
+  ABERTO
+  EM_ANDAMENTO
+  RESPONDIDO
+  FECHADO
+}
+
+// ----------------------------- USUÁRIOS ------------------------------------
+
+model User {
+  id                String     @id @default(uuid())
+  name              String
+  email             String     @unique
+  phone             String?
+  passwordHash      String
+  role              Role       @default(CLIENT)
+  status            UserStatus @default(ATIVO)
+  avatarUrl         String?
+  emailVerified     Boolean    @default(false)
+  emailVerifyToken  String?    @unique
+  resetToken        String?    @unique
+  resetTokenExpires DateTime?
+  blockedReason     String?
+  lastLoginAt       DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  barber            Barber?
+  client            Client?
+  refreshTokens     RefreshToken[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  sentMessages      Message[]        @relation("MessageSender")
+  consents          ConsentRecord[]
+  supportTickets    SupportTicket[]
+
+  @@index([role, status])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ----------------------------- BARBEIRO ------------------------------------
+
+model Barber {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  slug              String   @unique
+  shopName          String
+  bio               String?
+  coverUrl          String?
+  // Localização
+  address           String?
+  number            String?
+  complement        String?
+  district          String?
+  city              String?
+  state             String?
+  zipCode           String?
+  latitude          Float?
+  longitude         Float?
+  // Configurações
+  acceptsOnlinePayment Boolean @default(false)
+  requiresPrepayment   Boolean @default(false)
+  showPhonePublicly    Boolean @default(true)
+  mpAccountEmail       String?
+  slotIntervalMinutes  Int     @default(15)
+  cancellationHours    Int     @default(2)
+  featured             Boolean @default(false)
+  ratingAvg            Float   @default(0)
+  ratingCount          Int     @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  services      Service[]
+  availability  Availability[]
+  blockedTimes  BlockedTime[]
+  appointments  Appointment[]
+  subscriptions Subscription[]
+  reviews       Review[]
+  conversations Conversation[]
+
+  @@index([city, state])
+  @@index([featured])
+  @@map("barbers")
+}
+
+model Client {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  birthDate    DateTime?
+  city         String?
+  state        String?
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  reviews       Review[]
+  conversations Conversation[]
+
+  @@map("clients")
+}
+
+// ----------------------------- SERVIÇOS ------------------------------------
+
+model Service {
+  id              String   @id @default(uuid())
+  barberId        String
+  name            String
+  description     String?
+  priceCents      Int
+  durationMinutes Int
+  imageUrl        String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  barber       Barber        @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([barberId, active])
+  @@map("services")
+}
+
+// ----------------------------- AGENDA --------------------------------------
+
+/// Janela de trabalho recorrente por dia da semana (0 = domingo ... 6 = sábado)
+model Availability {
+  id          String  @id @default(uuid())
+  barberId    String
+  weekday     Int
+  startMinute Int // minutos desde 00:00 — ex.: 480 = 08:00
+  endMinute   Int // ex.: 1080 = 18:00
+  breakStart  Int? // intervalo de almoço
+  breakEnd    Int?
+  active      Boolean @default(true)
+
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@unique([barberId, weekday])
+  @@map("availability")
+}
+
+/// Bloqueios pontuais: folgas, feriados, férias, compromissos
+model BlockedTime {
+  id       String   @id @default(uuid())
+  barberId String
+  startsAt DateTime
+  endsAt   DateTime
+  reason   String?
+  allDay   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@index([barberId, startsAt, endsAt])
+  @@map("blocked_times")
+}
+
+// ----------------------------- AGENDAMENTOS --------------------------------
+
+model Appointment {
+  id            String            @id @default(uuid())
+  code          String            @unique
+  barberId      String
+  clientId      String
+  serviceId     String
+  startsAt      DateTime
+  endsAt        DateTime
+  status        AppointmentStatus @default(PENDENTE)
+  priceCents    Int
+  paymentMethod PaymentMethod     @default(PRESENCIAL)
+  paidOnline    Boolean           @default(false)
+  clientNotes   String?
+  barberNotes   String?
+  cancelReason  String?
+  cancelledBy   Role?
+  cancelledAt   DateTime?
+  confirmedAt   DateTime?
+  completedAt   DateTime?
+  reminderSentAt DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  barber   Barber    @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  client   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  service  Service   @relation(fields: [serviceId], references: [id])
+  payments Payment[]
+  review   Review?
+
+  /// Trava lógica que impede dois agendamentos ativos no mesmo horário do mesmo barbeiro.
+  /// Preenchida com `barberId:startsAt` enquanto o agendamento estiver ativo e NULL quando cancelado.
+  slotLock String? @unique
+
+  @@index([barberId, startsAt])
+  @@index([clientId, startsAt])
+  @@index([status])
+  @@map("appointments")
+}
+
+// ----------------------------- PLANOS / ASSINATURAS ------------------------
+
+model Plan {
+  id             String       @id @default(uuid())
+  name           String
+  slug           String       @unique
+  description    String?
+  priceCents     Int
+  billingCycle   BillingCycle @default(MENSAL)
+  trialDays      Int          @default(7)
+  maxServices    Int? // null = ilimitado
+  maxClients     Int?
+  onlinePayments Boolean      @default(false)
+  reports        Boolean      @default(false)
+  featuredListing Boolean     @default(false)
+  advancedStats  Boolean      @default(false)
+  customProfile  Boolean      @default(false)
+  features       String[]     @default([])
+  active         Boolean      @default(true)
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id            String             @id @default(uuid())
+  barberId      String
+  planId        String
+  status        SubscriptionStatus @default(TRIAL)
+  startedAt     DateTime           @default(now())
+  currentPeriodStart DateTime      @default(now())
+  currentPeriodEnd   DateTime
+  trialEndsAt   DateTime?
+  graceUntil    DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  autoRenew     Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  barber   Barber    @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  plan     Plan      @relation(fields: [planId], references: [id])
+  payments Payment[]
+
+  @@index([barberId, status])
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+// ----------------------------- PAGAMENTOS ----------------------------------
+
+model Payment {
+  id             String         @id @default(uuid())
+  purpose        PaymentPurpose
+  status         PaymentStatus  @default(PENDENTE)
+  amountCents    Int
+  currency       String         @default("BRL")
+  method         PaymentMethod  @default(PIX)
+  provider       String         @default("mercadopago")
+  providerPaymentId String?     @unique
+  providerPreferenceId String?
+  idempotencyKey String         @unique
+  // Dados PIX (nunca armazenamos dados de cartão)
+  pixQrCode      String?
+  pixQrCodeBase64 String?
+  pixExpiresAt   DateTime?
+  checkoutUrl    String?
+  payerEmail     String?
+  description    String?
+  rawPayload     Json?
+  approvedAt     DateTime?
+  refundedAt     DateTime?
+  subscriptionId String?
+  appointmentId  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  appointment  Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([status, purpose])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+model WebhookEvent {
+  id            String   @id @default(uuid())
+  provider      String   @default("mercadopago")
+  externalId    String
+  topic         String
+  signatureOk   Boolean  @default(false)
+  processed     Boolean  @default(false)
+  processedAt   DateTime?
+  attempts      Int      @default(0)
+  error         String?
+  payload       Json
+  createdAt     DateTime @default(now())
+
+  @@unique([provider, externalId, topic])
+  @@index([processed])
+  @@map("webhooks")
+}
+
+// ----------------------------- AVALIAÇÕES ----------------------------------
+
+model Review {
+  id            String   @id @default(uuid())
+  appointmentId String   @unique
+  barberId      String
+  clientId      String
+  rating        Int
+  comment       String?
+  reply         String?
+  hidden        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  barber      Barber      @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  client      Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([barberId, hidden])
+  @@map("reviews")
+}
+
+// ----------------------------- CHAT ----------------------------------------
+
+model Conversation {
+  id            String   @id @default(uuid())
+  barberId      String
+  clientId      String
+  lastMessageAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  barber   Barber    @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  client   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([barberId, clientId])
+  @@index([lastMessageAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String    @id @default(uuid())
+  conversationId String
+  senderId       String
+  body           String
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ----------------------------- NOTIFICAÇÕES --------------------------------
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// ----------------------------- AUDITORIA / LGPD ----------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entity     String?
+  entityId   String?
+  ip         String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model ConsentRecord {
+  id        String   @id @default(uuid())
+  userId    String
+  kind      String // termos_de_uso | politica_privacidade | marketing
+  version   String
+  granted   Boolean  @default(true)
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+  @@map("consent_records")
+}
+
+// ----------------------------- PLATAFORMA ----------------------------------
+
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+model FaqItem {
+  id        String   @id @default(uuid())
+  question  String
+  answer    String
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("faq_items")
+}
+
+model Banner {
+  id        String   @id @default(uuid())
+  title     String
+  subtitle  String?
+  imageUrl  String?
+  link      String?
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("banners")
+}
+
+model SupportTicket {
+  id        String        @id @default(uuid())
+  userId    String
+  subject   String
+  message   String
+  status    SupportStatus @default(ABERTO)
+  reply     String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("support_tickets")
+}
