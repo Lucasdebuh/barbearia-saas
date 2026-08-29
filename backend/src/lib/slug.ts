@@ -1,7 +1,15 @@
+// Faixa de marcas diacríticas combinantes (acentos) na forma NFD.
+const COMBINING_START = 0x300;
+const COMBINING_END = 0x36f;
+
+/** Converte um texto livre em um slug de URL: "Barbearia do João" -> "barbearia-do-joao". */
 export const slugify = (value: string) =>
-  value
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+  Array.from(value.normalize('NFD'))
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code < COMBINING_START || code > COMBINING_END;
+    })
+    .join('')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
